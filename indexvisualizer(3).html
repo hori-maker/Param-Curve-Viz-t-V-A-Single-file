@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>パラメトリック曲線の速度・加速度ビジュアライザ</title>
+  <style>
+    :root{ --bg:#ffffff; --panel:#f5f5f5; --ink:#111827; --muted:#4b5563; --accent:#0ea5e9; --good:#16a34a; --warn:#dc2626; }
+    html,body{height:100%; margin:0; background:var(--bg); color:var(--ink); font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,"Hiragino Kaku Gothic ProN","Noto Sans JP",Meiryo,sans-serif;}
+    .app{display:grid; grid-template-columns:360px 1fr; grid-template-rows:auto 1fr; height:100vh;}
+    header{grid-column:1 / -1; padding:12px 16px; background:#e5e7eb; display:flex; gap:12px; align-items:center; border-bottom:1px solid #d1d5db;}
+    header h1{font-size:16px; margin:0 8px 0 0; font-weight:700; letter-spacing:.02em}
+    .status{font-size:12px; padding:4px 8px; border-radius:999px; border:1px solid #d1d5db; background:#f3f4f6;}
+    .ok{color:var(--good)} .err{color:var(--warn)}
+    .side{padding:12px; background:var(--panel); border-right:1px solid #d1d5db; overflow:auto}
+    .field{margin:8px 0 12px}
+    .field label{display:block; font-size:12px; color:var(--muted); margin-bottom:4px}
+    .field input[type=text]{width:100%; box-sizing:border-box; padding:8px; color:var(--ink); background:#ffffff; border:1px solid #d1d5db; border-radius:10px; font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace}
+    .row{display:flex; gap:8px}
+    .row > *{flex:1}
+    button{appearance:none; border:1px solid #d1d5db; background:#f9fafb; color:var(--ink); padding:8px 10px; border-radius:999px; cursor:pointer}
+    button:hover{border-color:#9ca3af}
+    .small{font-size:12px; color:var(--muted)}
+    .toggle{display:flex; align-items:center; gap:8px; margin:6px 0}
+    .canvas-wrap{position:relative; background:#ffffff}
+    canvas{width:100%; height:100%; display:block;}
+    .hud{position:absolute; left:12px; top:12px; padding:8px 10px; background:rgba(255,255,255,.85); border:1px solid #d1d5db; border-radius:10px; backdrop-filter: blur(6px);}
+    .legend{display:flex; gap:10px; align-items:center; flex-wrap:wrap}
+    .dot{width:10px; height:10px; border-radius:50%}
+    .c-traj{background:#475569}
+    .c-vel{background:#16a34a}
+    .c-acc{background:#dc2626}
+    .range{width:100%}
+    pre{white-space:pre-wrap; background:#f9fafb; border:1px solid #d1d5db; border-radius:10px; padding:8px}
+  </style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>ParamCurve Viz — r(t), v(t), a(t)</h1>
+    <span id="status" class="status">準備中…</span>
+    <span style="font-size:12px;color:var(--muted)">eval/new Function不使用・外部依存なし（CSP対応）</span>
+    <button id="toggleTheme" style="margin-left:auto"></button>
+  </header>
+
+  <aside class="side">
+    <div class="field"><label>パラメータ（例: <code>r=2, ω=1</code>）</label><input id="params" type="text" value="r=2, ω=1"></div>
+    <div class="field"><label>x(t) =</label><input id="xt" type="text" value="r*cos(ω*t)"></div>
+    <div class="field"><label>y(t) =</label><input id="yt" type="text" value="r*sin(ω*t)"></div>
+    <div class="row">
+      <div class="field"><label>t_min</label><input id="tmin" type="text" value="0"></div>
+      <div class="field"><label>t_max</label><input id="tmax" type="text" value="2*pi"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>サンプル数</label><input id="samples" type="text" value="600"></div>
+      <div class="field"><label>矢印スケール</label><input id="vecscale" type="text" value="1"></div>
+    </div>
+    <div class="toggle"><input id="showV" type="checkbox" checked>速度 v を表示</div>
+    <div class="toggle"><input id="showA" type="checkbox" checked>加速度 a を表示</div>
+    <div class="toggle"><input id="showTrace" type="checkbox" checked>軌跡を表示</div>
+    <div class="field">
+      <label>例（上書き）</label>
+      <div class="row">
+        <button data-eg="circle">等速円運動</button>
+        <button data-eg="lissa">リサージュ</button>
+        <button data-eg="cycloid">サイクロイド</button>
+        <button data-eg="hyper">双曲線</button>
+      </div>
+    </div>
+    <div class="row">
+      <button id="apply">式を適用 ⏎</button>
+      <button id="resetView">表示をフィット</button>
+    </div>
+    <hr style="border-color:#d1d5db;margin:12px 0">
+    <div class="field">
+      <label>t</label>
+      <input id="tSlider" class="range" type="range" min="0" max="1" step="0.0001" value="0">
+      <div class="row">
+        <button id="play">▶ 再生</button>
+        <button id="stepBack">⟲ -Δt</button>
+        <button id="stepFwd">⟳ +Δt</button>
+      </div>
+      <div class="row">
+        <div class="field"><label>Δt (アニメ速度)</label><input id="dtAnim" type="text" value="0.01"></div>
+        <div class="field"><label>微分Δ (数値微分)</label><input id="h" type="text" value="1e-4"></div>
+      </div>
+    </div>
+    <p class="small">対応演算: <code>+ - * / ^ ( )</code>、関数: <code>sin, cos, tan, asin, acos, atan, exp, log, sqrt, abs</code>、定数: <code>pi, e</code>。ギリシャ文字 <code>ω</code>、数式フォントの <code>𝑖</code> なども可（Unicode対応）。</p>
+    <hr style="border-color:#d1d5db;margin:12px 0">
+    <div class="field">
+      <label>診断 / テスト</label>
+      <div class="row">
+        <button id="runTests">テストを実行</button>
+        <button id="copyLink">設定をURL化</button>
+      </div>
+      <pre id="testlog" style="margin-top:6px;max-height:220px;overflow:auto"></pre>
+    </div>
+  </aside>
+
+  <main class="canvas-wrap" id="viewport">
+    <canvas id="cv"></canvas>
+    <div class="hud" id="hud">
+      <div class="legend">
+        <span class="dot c-traj"></span><span>軌跡</span>
+        <span class="dot c-vel"></span><span>v = (dx/dt, dy/dt)</span>
+        <span class="dot c-acc"></span><span>a = d²r/dt²</span>
+      </div>
+      <div id="readout" style="font-size:12px;margin-top:6px"></div>
+    </div>
+  </main>
+</div>
+
+<script>
+/* ==== テーマ切替（ライト既定） ==== */
+(function(){
+  const saved = localStorage.getItem('pcv-theme') || 'light';
+  document.documentElement.setAttribute('data-theme', saved);
+  const btn = document.getElementById('toggleTheme');
+  const syncLabel = () => btn.textContent =
+    (document.documentElement.getAttribute('data-theme')==='light'?'🌞 ライト':'🌙 ダーク');
+  syncLabel();
+  btn.onclick = () => {
+    const cur = document.documentElement.getAttribute('data-theme')==='light'?'dark':'light';
+    document.documentElement.setAttribute('data-theme', cur);
+    localStorage.setItem('pcv-theme', cur);
+    syncLabel();
+  };
+})();
+
+/* ==== 本体（CSPセーフ：eval/new Function 不使用） ==== */
+(() => {
+  const Func = {sin:Math.sin,cos:Math.cos,tan:Math.tan,asin:Math.asin,acos:Math.acos,atan:Math.atan,exp:Math.exp,log:Math.log,sqrt:Math.sqrt,abs:Math.abs};
+  const Const = {pi:Math.PI,e:Math.E};
+
+  function tokenize(expr){
+    expr = (expr+"").normalize('NFKC'); // ω や 𝑖 等を正規化
+    const out=[]; let i=0; const n=expr.length;
+    const isWS=c=>/\s/.test(c), isDigit=c=>/[0-9]/.test(c);
+    const isIdStart=c=>(/[\p{L}_]/u).test(c), isId=c=>(/[\p{L}\p{N}_]/u).test(c);
+    while(i<n){
+      const c=expr[i];
+      if(isWS(c)){ i++; continue; }
+      if(isDigit(c) || (c==='.' && isDigit(expr[i+1]))){
+        let j=i+1; while(j<n && /[0-9_]/.test(expr[j])) j++;
+        if(j<n && expr[j]==='.') { j++; while(j<n && /[0-9_]/.test(expr[j])) j++; }
+        if(j<n && /[eE]/.test(expr[j])){ j++; if(/[+\-]/.test(expr[j])) j++; while(j<n && /[0-9]/.test(expr[j])) j++; }
+        out.push({type:'num',value:parseFloat(expr.slice(i,j).replaceAll('_',''))}); i=j; continue;
+      }
+      if(isIdStart(c)){ let j=i+1; while(j<n && isId(expr[j])) j++; out.push({type:'id',value:expr.slice(i,j)}); i=j; continue; }
+      if('+-*/^(),'.includes(c)){ out.push({type:c}); i++; continue; }
+      throw new Error('未知の文字: '+c);
+    }
+    return out;
+  }
+
+  function toRPN(tokens){
+    const out=[], op=[]; const prec={'u-':4,'^':3,'*':2,'/':2,'+':1,'-':1}; const right={'^':true,'u-':true};
+    let prev=null;
+    for(let i=0;i<tokens.length;i++){
+      const t=tokens[i];
+      if(t.type==='num'){ out.push(t); prev=t; continue; }
+      if(t.type==='id'){
+        if(tokens[i+1]&&tokens[i+1].type==='('){ op.push({type:'func',name:t.value}); prev=null; continue; }
+        out.push({type:'var',name:t.value}); prev=t; continue;
+      }
+      if(t.type==='('){ op.push(t); prev=t; continue; }
+      if(t.type===')'){
+        while(op.length&&op[op.length-1].type!=='(') out.push(op.pop());
+        if(!op.length) throw new Error('対応しない括弧 )');
+        op.pop();
+        if(op.length&&op[op.length-1].type==='func') out.push(op.pop());
+        prev=t; continue;
+      }
+      if(t.type===',') throw new Error('関数は単一引数のみ対応（カンマ不可）');
+      if(['+','-','*','/','^'].includes(t.type)){
+        const type=(t.type==='-'&&(!prev||['+','-','*','/','^','('].includes(prev.type)))?'u-':t.type;
+        while(op.length){
+          const top=op[op.length-1];
+          if(['+','-','*','/','^','u-'].includes(top.type) && ((right[type]? prec[type]<prec[top.type] : prec[type]<=prec[top.type]))){ out.push(op.pop()); }
+          else break;
+        }
+        op.push({type}); prev=t; continue;
+      }
+      throw new Error('無効なトークン: '+JSON.stringify(t));
+    }
+    while(op.length){ const top=op.pop(); if(top.type==='(') throw new Error('対応しない括弧 ('); out.push(top); }
+    return out;
+  }
+
+  function compileSafe(expr){
+    const rpn = toRPN(tokenize(expr));
+    return { evaluate(scope){
+      const st=[];
+      for(const t of rpn){
+        if(t.type==='num') st.push(t.value);
+        else if(t.type==='var'){
+          if(t.name in scope) st.push(scope[t.name]);
+          else if(t.name in Const) st.push(Const[t.name]);
+          else throw new Error('未定義の変数: '+t.name);
+        } else if(['+','-','*','/','^','u-'].includes(t.type)){
+          if(t.type==='u-'){ const a=st.pop(); st.push(-a); continue; }
+          const b=st.pop(), a=st.pop();
+          switch(t.type){case '+':st.push(a+b);break;case '-':st.push(a-b);break;case '*':st.push(a*b);break;case '/':st.push(a/b);break;case '^':st.push(Math.pow(a,b));break;}
+        } else if(t.type==='func'){
+          const a=st.pop(); const fn=Func[t.name]; if(!fn) throw new Error('未対応の関数: '+t.name); st.push(fn(a));
+        } else throw new Error('評価エラー');
+      }
+      if(st.length!==1) throw new Error('式の解釈に失敗しました');
+      return st[0];
+    }};
+  }
+
+  const E = { compile: compileSafe, evaluate: (expr,scope)=>compileSafe(expr).evaluate(scope) };
+
+  // ===== 可視化 =====
+  const $ = s=>document.querySelector(s);
+  const el={params:$('#params'),xt:$('#xt'),yt:$('#yt'),tmin:$('#tmin'),tmax:$('#tmax'),samples:$('#samples'),vecscale:$('#vecscale'),tSlider:$('#tSlider'),
+            showV:$('#showV'),showA:$('#showA'),showTrace:$('#showTrace'),play:$('#play'),stepBack:$('#stepBack'),stepFwd:$('#stepFwd'),
+            dtAnim:$('#dtAnim'),h:$('#h'),apply:$('#apply'),resetView:$('#resetView'),cv:$('#cv'),viewport:$('#viewport'),
+            readout:$('#readout'),status:$('#status'),testlog:$('#testlog'),runTests:$('#runTests'),copyLink:$('#copyLink')};
+  let state={compiled:null,scopeBase:{},tmin:0,tmax:2*Math.PI,samples:600,playing:false,t:0,view:{cx:0,cy:0,scale:80},vecScale:1,h:1e-4,lastError:null};
+
+  function setStatus(ok,msg){ el.status.className='status '+(ok?'ok':'err'); el.status.textContent=ok?(msg||'OK'):(msg||'エラー'); }
+  function parseParams(str){ const scope={}; if(!str||!str.trim()) return scope; const base={pi:Math.PI,e:Math.E};
+    for(const part of str.split(',').map(s=>s.trim()).filter(Boolean)){ const eq=part.indexOf('='); if(eq<0) continue;
+      const k=part.slice(0,eq).trim(); const v=part.slice(eq+1).trim();
+      try{ const val=E.evaluate(v,{...base,...scope}); scope[k]=val; if(k==='ω') scope['w']=val; if(k==='w') scope['ω']=val; }catch{}
+    } return scope; }
+  function compile(expr){ return E.compile(expr); }
+  function makeScope(t){ return {t,pi:Math.PI,e:Math.E,...state.scopeBase}; }
+  function ensureCompiled(){ return state.compiled && state.compiled.x && state.compiled.y; }
+  function evalXY(t){ if(!ensureCompiled()) return [NaN,NaN]; const s=makeScope(t); return [state.compiled.x.evaluate(s),state.compiled.y.evaluate(s)]; }
+  const d1=(f,t,h)=>(f(t+h)-f(t-h))/(2*h), d2=(f,t,h)=>(f(t+h)-2*f(t)+f(t-h))/(h*h);
+  function evalVA(t){ const h=state.h*Math.max(1,Math.abs(state.tmax-state.tmin)); const fx=τ=>evalXY(τ)[0], fy=τ=>evalXY(τ)[1];
+    const vx=d1(fx,t,h),vy=d1(fy,t,h),ax=d2(fx,t,h),ay=d2(fy,t,h); return {vx,vy,ax,ay,speed:Math.hypot(vx,vy),acc:Math.hypot(ax,ay)}; }
+
+  // === 改良: 外れ値を除外した自動フィット（発散対策） ===
+  function sampleBounds(){
+    if(!ensureCompiled()) return;
+    const n = state.samples; const xs=[], ys=[];
+    for(let i=0;i<=n;i++){
+      const t=state.tmin+(state.tmax-state.tmin)*i/n; const [x,y]=evalXY(t);
+      if(Number.isFinite(x)&&Number.isFinite(y)){ xs.push(x); ys.push(y); }
+    }
+    if(xs.length<5){ state.view={cx:0,cy:0,scale:80}; return; }
+    xs.sort((a,b)=>a-b); ys.sort((a,b)=>a-b);
+    const q = (arr,p)=>{ const idx=Math.max(0,Math.min(arr.length-1,Math.round((arr.length-1)*p))); return arr[idx]; };
+    const minX=q(xs,0.02), maxX=q(xs,0.98); const minY=q(ys,0.02), maxY=q(ys,0.98);
+    const cx=(minX+maxX)/2, cy=(minY+maxY)/2, pad=1.1;
+    const dx=(maxX-minX)||2, dy=(maxY-minY)||2;
+    const sx=(el.cv.width*0.45)/(dx/2*pad), sy=(el.cv.height*0.45)/(dy/2*pad);
+    state.view={cx,cy,scale:Math.max(20,Math.min(sx,sy))};
+  }
+
+  function W2S([x,y]){ const {cx,cy,scale}=state.view; return [(x-cx)*scale+el.cv.width/2,(-y+cy)*scale+el.cv.height/2]; }
+  function S2W([sx,sy]){ const {cx,cy,scale}=state.view; return [(sx-el.cv.width/2)/scale+cx, -(sy-el.cv.height/2)/scale+cy]; }
+  function niceStep(raw){ const p=Math.pow(10,Math.floor(Math.log10(raw))); const m=raw/p; return (m<1.5?1:m<3?2:m<7?5:10)*p; }
+
+  function drawAxes(ctx){
+    const step=niceStep(el.cv.width/state.view.scale/10);
+    ctx.lineWidth=1; ctx.strokeStyle='#d1d5db';
+    const l=S2W([0,0])[0], r=S2W([el.cv.width,0])[0], t=S2W([0,0])[1], b=S2W([0,el.cv.height])[1];
+    const x0=Math.ceil(l/step)*step; for(let x=x0;x<r;x+=step){ const [sx]=W2S([x,0]); ctx.beginPath(); ctx.moveTo(sx,0); ctx.lineTo(sx,el.cv.height); ctx.stroke(); }
+    const y0=Math.ceil(b/step)*step; for(let y=y0;y<t;y+=step){ const [,sy]=W2S([0,y]); ctx.beginPath(); ctx.moveTo(0,sy); ctx.lineTo(el.cv.width,sy); ctx.stroke(); }
+    ctx.strokeStyle='#94a3b8'; ctx.lineWidth=1.5;
+    const [sx0,sy0]=W2S([0,0]); ctx.beginPath(); ctx.moveTo(0,sy0); ctx.lineTo(el.cv.width,sy0); ctx.stroke(); ctx.beginPath(); ctx.moveTo(sx0,0); ctx.lineTo(sx0,el.cv.height); ctx.stroke();
+  }
+
+  function drawArrow(ctx,sx,sy,ex,ey,color){
+    ctx.strokeStyle=color; ctx.fillStyle=color; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(sx,sy); ctx.lineTo(ex,ey); ctx.stroke();
+    const ang=Math.atan2(ey-sy,ex-sx), L=10; ctx.beginPath(); ctx.moveTo(ex,ey);
+    ctx.lineTo(ex-L*Math.cos(ang-Math.PI/6),ey-L*Math.sin(ang-Math.PI/6));
+    ctx.lineTo(ex-L*Math.cos(ang+Math.PI/6),ey-L*Math.sin(ang+Math.PI/6)); ctx.closePath(); ctx.fill();
+  }
+
+  function draw(){
+    const c=el.cv.getContext('2d');
+    c.clearRect(0,0,el.cv.width,el.cv.height);
+    drawAxes(c);
+
+    if(!ensureCompiled()){
+      c.fillStyle='#6b7280'; c.font=`${14*(devicePixelRatio||1)}px system-ui`;
+      c.fillText('左の式を入力して「式を適用」を押してください。',20,30);
+      setStatus(false,state.lastError?`式エラー: ${state.lastError}`:'未適用');
+      el.readout.textContent=''; return;
+    }
+
+    // === 改良: 発散点で線を分割して描画 ===
+    if(el.showTrace.checked){
+      c.lineWidth=2; c.strokeStyle='#64748b';
+      let penDown=false; let prevS=null;
+      const jumpPx = Math.max(25, Math.min(el.cv.width, el.cv.height) * 0.06);
+      for(let i=0;i<=state.samples;i++){
+        const t=state.tmin+(state.tmax-state.tmin)*i/state.samples;
+        const [x,y]=evalXY(t);
+        if(!Number.isFinite(x)||!Number.isFinite(y)){ penDown=false; prevS=null; continue; }
+        const S=W2S([x,y]);
+        if(!penDown || !prevS || Math.hypot(S[0]-prevS[0], S[1]-prevS[1])>jumpPx){
+          if(penDown) c.stroke();
+          c.beginPath(); c.moveTo(S[0],S[1]); penDown=true;
+        } else {
+          c.lineTo(S[0],S[1]);
+        }
+        prevS=S;
+      }
+      if(penDown) c.stroke();
+    }
+
+    const [x,y]=evalXY(state.t); const [sx,sy]=W2S([x,y]);
+    c.fillStyle='#b45309'; c.beginPath(); c.arc(sx,sy,5,0,Math.PI*2); c.fill();
+
+    const {vx,vy,ax,ay,speed,acc}=evalVA(state.t); const k=state.vecScale;
+    if(el.showV.checked){ const [ex,ey]=W2S([x+vx*k,y+vy*k]); drawArrow(c,sx,sy,ex,ey,'#10b981'); }
+    if(el.showA.checked){ const [ex2,ey2]=W2S([x+ax*k,y+ay*k]); drawArrow(c,sx,sy,ex2,ey2,'#ec4899'); }
+
+    const fmt=v=>Number.isFinite(v)?(Math.abs(v)>1e4||Math.abs(v)<1e-3?v.toExponential(3):v.toFixed(4)):'NaN';
+    el.readout.innerHTML=`t=${state.t.toFixed(4)}<br>r(t)=(${fmt(x)}, ${fmt(y)})<br>|v|=${fmt(speed)} , v=(${fmt(vx)}, ${fmt(vy)})<br>|a|=${fmt(acc)} , a=(${fmt(ax)}, ${fmt(ay)})`;
+    setStatus(true,'OK');
+  }
+
+  function resize(){ const dpr=window.devicePixelRatio||1; el.cv.width=el.viewport.clientWidth*dpr; el.cv.height=el.viewport.clientHeight*dpr; draw(); }
+  addEventListener('resize',resize);
+
+  function apply(){
+    try{
+      state.scopeBase=parseParams(el.params.value);
+      state.tmin=E.evaluate(el.tmin.value,makeScope(0));
+      state.tmax=E.evaluate(el.tmax.value,makeScope(1));
+      state.samples=Math.max(50,Math.min(5000,Math.floor(Number(el.samples.value)||600)));
+      state.vecScale=Number(el.vecscale.value)||1; state.h=Number(el.h.value)||1e-4;
+      state.compiled={x:compile(el.xt.value),y:compile(el.yt.value)};
+      state.t=state.tmin; state.playing=false; el.play.textContent='▶ 再生'; state.lastError=null;
+      sampleBounds(); draw(); runTests();
+    }catch(err){ state.compiled=null; state.lastError=err.message; alert('式の解釈に失敗しました: '+err.message); console.error(err); draw(); }
+  }
+
+  function syncSlider(){ const s=(state.t-state.tmin)/(state.tmax-state.tmin); el.tSlider.value=Math.max(0,Math.min(1,s)); }
+  function onSlider(){ const s=Number(el.tSlider.value); state.t=state.tmin+(state.tmax-state.tmin)*s; draw(); }
+
+  let raf=0,lastT=0;
+  function tick(ts){
+    if(!state.playing) return;
+    if(!ensureCompiled()){ state.playing=false; el.play.textContent='▶ 再生'; return; }
+    if(!lastT) lastT=ts; const dt=Math.min(0.05,(ts-lastT)/1000); lastT=ts;
+    const speed=Number(el.dtAnim.value)||0.01;
+    state.t+=speed*(state.tmax-state.tmin)*dt; if(state.t>state.tmax) state.t=state.tmin;
+    syncSlider(); draw(); raf=requestAnimationFrame(tick);
+  }
+  el.play.onclick=()=>{ state.playing=!state.playing; lastT=0; el.play.textContent=state.playing?'⏸ 停止':'▶ 再生'; if(state.playing) raf=requestAnimationFrame(tick); else cancelAnimationFrame(raf); };
+  el.stepFwd.onclick=()=>{ state.t=Math.min(state.tmax,state.t+(Number(el.dtAnim.value)||0.01)*(state.tmax-state.tmin)); syncSlider(); draw(); };
+  el.stepBack.onclick=()=>{ state.t=Math.max(state.tmin,state.t-(Number(el.dtAnim.value)||0.01)*(state.tmax-state.tmin)); syncSlider(); draw(); };
+
+  ['params','xt','yt','tmin','tmax','samples','vecscale','h','dtAnim'].forEach(id=>{
+    document.getElementById(id).addEventListener('keydown',e=>{ if(e.key==='Enter') apply(); });
+  });
+
+  document.querySelectorAll('[data-eg]').forEach(b=>b.addEventListener('click',()=>{
+    const k=b.dataset.eg;
+    if(k==='circle'){ el.params.value='r=2, ω=1'; el.xt.value='r*cos(ω*t)'; el.yt.value='r*sin(ω*t)'; el.tmin.value='0'; el.tmax.value='2*pi'; }
+    else if(k==='lissa'){ el.params.value='A=2, a=3, b=2, δ=pi/2'; el.xt.value='A*sin(a*t + δ)'; el.yt.value='A*sin(b*t)'; el.tmin.value='0'; el.tmax.value='2*pi'; }
+    else if(k==='cycloid'){ el.params.value=''; el.xt.value='t - sin(t)'; el.yt.value='1 - cos(t)'; el.tmin.value='0'; el.tmax.value='6*pi'; }
+    else if(k==='hyper'){ el.params.value=''; el.xt.value='3/cos(t)'; el.yt.value='2*tan(t)'; el.tmin.value='-1.2'; el.tmax.value='1.2'; }
+    apply();
+  }));
+
+  el.apply.onclick=apply; el.resetView.onclick=()=>{ sampleBounds(); draw(); };
+  el.tSlider.addEventListener('input',onSlider);
+  el.vecscale.addEventListener('change',()=>{ state.vecScale=Number(el.vecscale.value)||1; draw(); });
+  el.showV.onchange=draw; el.showA.onchange=draw; el.showTrace.onchange=draw;
+
+  // Pan & zoom
+  let dragging=false,lastPos=[0,0];
+  el.viewport.addEventListener('mousedown',e=>{ dragging=true; lastPos=[e.clientX,e.clientY]; });
+  addEventListener('mouseup',()=>dragging=false);
+  addEventListener('mousemove',e=>{ if(!dragging) return; const dx=e.clientX-lastPos[0], dy=e.clientY-lastPos[1]; lastPos=[e.clientX,e.clientY];
+    state.view.cx -= dx/state.view.scale; state.view.cy += dy/state.view.scale; draw(); });
+
+  el.viewport.addEventListener('wheel',e=>{
+    const dpr=devicePixelRatio||1;
+    const before=S2W([e.offsetX*dpr,e.offsetY*dpr]);
+    const factor=Math.exp(-e.deltaY*0.001);
+    state.view.scale=Math.max(5,Math.min(2000,state.view.scale*factor));
+    const after=S2W([e.offsetX*dpr,e.offsetY*dpr]);
+    state.view.cx += before[0]-after[0];
+    state.view.cy += before[1]-after[1];
+    draw();
+  },{passive:true});
+
+  // ---- テスト ----
+  function log(s){ el.testlog.textContent += s + "\n"; }
+  function clearLog(){ el.testlog.textContent=''; }
+  function approx(a,b,eps=1e-2){ return Math.abs(a-b) <= eps*(1+Math.max(Math.abs(a),Math.abs(b))); }
+  function runTests(){
+    clearLog(); log('▶ Smoke Tests');
+    log('T1 compiled: ' + (ensureCompiled()?'PASS':'FAIL'));
+    if(!ensureCompiled()) return;
+    const ts=[state.tmin,(state.tmin+state.tmax)/2,state.tmax];
+    const finite=ts.every(t=>evalXY(t).every(Number.isFinite)); log('T2 finite eval: ' + (finite?'PASS':'FAIL'));
+    const va=evalVA((state.tmin+state.tmax)/2); const finiteVA=[va.vx,va.vy,va.ax,va.ay].every(Number.isFinite); log('T3 finite v/a: ' + (finiteVA?'PASS':'FAIL'));
+    log('T4 parser numbers: ' + (approx(E.evaluate('1+2*3',{}),7)&&approx(E.evaluate('2^3^2',{}),512)?'PASS':'FAIL'));
+    log('T5 parser funcs: ' + (approx(E.evaluate('sin(pi/2)',{}),1)&&approx(E.evaluate('sqrt(4)+abs(-3)',{}),5)?'PASS':'FAIL'));
+    try { const testScope={pi:Math.PI,e:Math.E,t:0,ω:1,w:1}; const ok = approx(E.evaluate('cos(ω*t)', testScope), 1); log('T6 unicode id ω: ' + (ok? 'PASS':'FAIL')); }
+    catch(e){ log('T6 unicode id ω: FAIL ('+e.message+')'); }
+    try { const scope={t:0,i:1,pi:Math.PI,e:Math.E}; const val=E.evaluate('cos(𝑖*t)', scope); log('T7 unicode italic i: ' + (Math.abs(val-1)<1e-9?'PASS':'FAIL '+val)); }
+    catch(e){ log('T7 error: '+e.message); }
+    const x=el.xt.value.replace(/\s+/g,''), y=el.yt.value.replace(/\s+/g,'');
+    const isCircle=/^r\*?cos\(.*ω\*?t.*\)$/i.test(x)&&/^r\*?sin\(.*ω\*?t.*\)$/i.test(y);
+    if(isCircle){
+      const r=state.scopeBase['r'], w=state.scopeBase['ω']??state.scopeBase['w']; let vmin=1/0,vmax=0;
+      for(let i=0;i<=120;i++){ const t=state.tmin+(state.tmax-state.tmin)*i/120; const sp=evalVA(t).speed; vmin=Math.min(vmin,sp); vmax=Math.max(vmax,sp); }
+      const constOK=(vmax-vmin)<=1e-2*(1+vmax); const refOK=(r!=null&&w!=null)?approx((vmin+vmax)/2,r*w,2e-2):true;
+      log('T8 circle |v| const: '+(constOK?'PASS':'FAIL')+' ; match rω: '+(refOK?'PASS':'SKIP'));
+    } else { log('T8 circle check: SKIP'); }
+  }
+  el.runTests.onclick=runTests;
+
+  // 設定URL共有
+  el.copyLink.onclick=()=>{ const p=new URLSearchParams({p:el.params.value,x:el.xt.value,y:el.yt.value,t0:el.tmin.value,t1:el.tmax.value,n:el.samples.value}); const url=location.origin+location.pathname+'?'+p.toString(); navigator.clipboard?.writeText(url); alert('現在の設定URLをコピーしました\n'+url); };
+  function restore(){ const q=new URLSearchParams(location.search); if(!q.size) return; if(q.get('p')!=null) el.params.value=q.get('p'); if(q.get('x')!=null) el.xt.value=q.get('x'); if(q.get('y')!=null) el.yt.value=q.get('y'); if(q.get('t0')!=null) el.tmin.value=q.get('t0'); if(q.get('t1')!=null) el.tmax.value=q.get('t1'); if(q.get('n')!=null) el.samples.value=q.get('n'); }
+
+  function init(){ restore(); apply(); resize(); const s=(state.t-state.tmin)/(state.tmax-state.tmin); el.tSlider.value=Math.max(0,Math.min(1,s)); }
+  init();
+})();
+</script>
+</body>
+</html>
