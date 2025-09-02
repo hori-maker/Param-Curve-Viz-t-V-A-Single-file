@@ -81,7 +81,7 @@
         <button id="stepFwd">⟳ +Δt</button>
       </div>
       <div class="row">
-        <div class="field"><label>Δt (アニメ速度)</label><input id="dtAnim" type="text" value="0.01"></div>
+        <div class="field"><label>Δt (アニメ速度)</label><input id="dtAnim" type="text" value="0.1"></div>
         <div class="field"><label>微分Δ (数値微分)</label><input id="h" type="text" value="1e-4"></div>
       </div>
     </div>
@@ -343,13 +343,13 @@
     if(!state.playing) return;
     if(!ensureCompiled()){ state.playing=false; el.play.textContent='▶ 再生'; return; }
     if(!lastT) lastT=ts; const dt=Math.min(0.05,(ts-lastT)/1000); lastT=ts;
-    const speed=Number(el.dtAnim.value)||0.01;
+    const speed=Number(el.dtAnim.value)||0.1;
     state.t+=speed*(state.tmax-state.tmin)*dt; if(state.t>state.tmax) state.t=state.tmin;
     syncSlider(); draw(); raf=requestAnimationFrame(tick);
   }
   el.play.onclick=()=>{ state.playing=!state.playing; lastT=0; el.play.textContent=state.playing?'⏸ 停止':'▶ 再生'; if(state.playing) raf=requestAnimationFrame(tick); else cancelAnimationFrame(raf); };
-  el.stepFwd.onclick=()=>{ state.t=Math.min(state.tmax,state.t+(Number(el.dtAnim.value)||0.01)*(state.tmax-state.tmin)); syncSlider(); draw(); };
-  el.stepBack.onclick=()=>{ state.t=Math.max(state.tmin,state.t-(Number(el.dtAnim.value)||0.01)*(state.tmax-state.tmin)); syncSlider(); draw(); };
+  el.stepFwd.onclick=()=>{ state.t=Math.min(state.tmax,state.t+(Number(el.dtAnim.value)||0.1)*(state.tmax-state.tmin)); syncSlider(); draw(); };
+  el.stepBack.onclick=()=>{ state.t=Math.max(state.tmin,state.t-(Number(el.dtAnim.value)||0.1)*(state.tmax-state.tmin)); syncSlider(); draw(); };
 
   ['params','xt','yt','tmin','tmax','samples','vecscale','h','dtAnim'].forEach(id=>{
     document.getElementById(id).addEventListener('keydown',e=>{ if(e.key==='Enter') apply(); });
